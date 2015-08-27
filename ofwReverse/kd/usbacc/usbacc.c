@@ -51,7 +51,7 @@ struct UsbDriver g_driver =	// 0x00000 + 164
 };
 
 u64	g_info;	// 0x00000 + 240 + 0
-struct DeviceRequest devReq;	// 0x00000 + 248 = 0x00000 + 240 + 8
+struct DeviceRequest g_devReq;	// 0x00000 + 248 = 0x00000 + 240 + 8
 struct UsbdDeviceReq	g_usbDevReq;	// 0x00000 + 256 = 0x00000 + 240 + 16
 u8	*g_lpData;	// 0x00000 + 240 + 56
 int g_hFPL;	// 0x00000 + 240 + 60
@@ -141,7 +141,7 @@ int RecvCtrl(int arg1, int arg2, struct DeviceRequest *lpDevReq)	// 0x1DC
 	asm("swr        $v0, -8($s1)");
 	asm("swl        $v1, -1($s1)");
 	asm("swr        $v1, -4($s1)");*/
-	devReq = *lpDevReq;
+	g_devReq = *lpDevReq;
 
 	if (arg2 < 0)
 	{
@@ -305,9 +305,9 @@ int DriverStop(int size, void *args)	// 0x57C
 
 void UsbDevReqComplete(struct UsbdDeviceReq *lpReq)	// 0x5B4
 {
-	if ((lpReq->retcode == 0) && (devReq.bmRequestType >= 0))
+	if ((lpReq->retcode == 0) && (g_devReq.bmRequestType >= 0))
 	{
-		if (devReq.bRequest == 1)
+		if (g_devReq.bRequest == 1)
 		{
 			g_info = *(u64*)(lpReq->data);
 		}
