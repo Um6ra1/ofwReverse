@@ -16,8 +16,14 @@ int DriverStart(int size, void *args);
 int DriverStop(int size, void *args);
 void UsbDevReqComplete(struct UsbdDeviceReq *lpReq);
 
+struct StringDescriptor	strDesc =
+{
+	0x1C, 0x03,
+	{ 'U', 'S', 'B', ' ', 'A', 'c', 'c', 'e', 's', 's', 'o', 'r', 'y', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+};
+
 // UsbData.exdp[2~3] is not used?
-struct UsbData *sub_00000670(int v, struct UsbData *lpUsbData, struct Config *lpUsbConf, struct ConfDesc *lpConfDesc);
+struct UsbData *sub_00000670(int speed, struct DeviceDescriptor *lpDevDesc, struct Config *lpUsbConf, struct ConfDesc *lpConfDesc);
 
 struct UsbEndpoint	g_usbEndps[2];	// 0x00000 + 128	
 
@@ -33,7 +39,7 @@ struct UsbDriver g_driver =	// 0x00000 + 164
 	NULL,	// confp_hi
 	NULL,
 	NULL,	// confp
-	NULL,
+	&strDesc,	// strp
 	RecvCtrl,	//0x01DC
 	NULL,
 	Attach,	//0x060C
@@ -45,15 +51,16 @@ struct UsbDriver g_driver =	// 0x00000 + 164
 };
 
 u64	g_info;	// 0x00000 + 240 + 0
-s8	g_v8;	// 0x00000 + 240 + 8
-u8	g_v9;	// 0x00000 + 240 + 9
+struct DeviceRequest devReq;	// 0x00000 + 248 = 0x00000 + 240 + 8
+struct UsbdDeviceReq	g_usbDevReq;	// 0x00000 + 256 = 0x00000 + 240 + 16
 u8	*g_lpData;	// 0x00000 + 240 + 56
-int g_createdPoolUID;	// 0x00000 + 240 + 60
+int g_hFPL;	// 0x00000 + 240 + 60
 u16	g_type;	// 0x00000 + 240 + 64
 s8	g_bStarted;	// 0x00000 + 240 + 66
 u8	g_bAttached;	// 0x00000 + 240 + 67
-struct DeviceRequest devReq;	// 0x00000 + 248
-struct UsbdDeviceReq	g_usbDevReq;	// 0x00000 + 256
+
+#define SPEED_FULL	1
+#define SPEED_HIGH	2
 
 // OK
 int sceUsbAccGetAuthStat() // at 0x00000000 
@@ -121,7 +128,7 @@ int sceUsbAcc_internal_2A100C1F(struct UsbdDeviceReq *lpReq) // at 0x00000154
 }
 
 // OK
-int RecvCtrl(int arg1, int arg2, struct DeviceRequest *lpDevReq)
+int RecvCtrl(int arg1, int arg2, struct DeviceRequest *lpDevReq)	// 0x1DC
 {
 	/*s0 = a2;
 	s1 = &g_usbDevReq;
@@ -195,43 +202,36 @@ int RecvCtrl(int arg1, int arg2, struct DeviceRequest *lpDevReq)
 	return (0);
 }
 
+// OK
 int DriverStart(int size, void *args)
 {
-	u8 *lpData;
-	struct UsbData	*lpUsbData;
-
-	// a0 = 0x00000 + 2936
-	// (LPCSTR name, int part, int attr, unsigned int size, unsigned int blocks, struct SceKernelFplOptParam *opt)
-	SceUID hFpl = sceKernelCreateFpl("SceUsbAcc", 1, 256, 368, 1, NULL);	// 368 = 2*184=2*sizeof(UsbData)
-	g_createdPoolUID = hFpl;
-	if (hFpl < 0)
+	void	*lpData;
+	SceUID hFPL = sceKernelCreateFpl("SceUsbAcc", 1, 256, 368, 1, NULL);	// 368 = 2*184=2*sizeof(UsbData)
+	g_hFPL = hFPL;
+	if (hFPL< 0)
 	{
 		return (-1);
 	}
-	if (sceKernelTryAllocateFpl(hFpl, &lpData) < 0)
+	if (sceKernelTryAllocateFpl(hFPL, &lpData) < 0)
 	{
-		sceKernelDeleteFpl(g_createdPoolUID);
-		return(-1);
+		sceKernelDeleteFpl(g_hFPL);
+		return (-1);
 	}
+
 	g_lpData = lpData;
-	lpUsbData = lpData + 64;
-/*	t4 = lpUsbData->devdesc;	//t4 = lpData + 64 - 64;	16
-	t3 = lpUsbData->config;	//t3 = lpData + 84 - 64;	21
-	t2 = lpUsbData->confdesc;	//t2 = lpData + 100 - 64;	25
-	g_driver.devp_hi = t4;
-	g_driver.confp_hi = t3;
-	*(s32*)(sp + 0) = t2;
-	struct UsbData	*v0 = sub_00000670(2, t4, t3, t2);	// size, lpDevpHi, lpConfpHi, lpBuff*/
-
-	g_driver.devp_hi = lpUsbData->devdesc;
+	
+	struct UsbData	*lpUsbData = (struct UsbData	*)((int)lpData + 64);
+	
+	g_driver.devp_hi = lpUsbData->devdesc;	// UsbData[0]
 	g_driver.confp_hi = &lpUsbData->config;
-	struct UsbData	*v0 = sub_00000670(2, lpUsbData->devdesc, &lpUsbData->config, &lpUsbData->confdesc);
+	lpData = &lpUsbData->confdesc;
+	lpUsbData = sub_00000670(SPEED_HIGH, lpUsbData->devdesc, &lpUsbData->config, &lpUsbData->confdesc);
+	
+	g_driver.devp = lpUsbData->devdesc;	// UsbData[1]
+	g_driver.confp = &lpUsbData->config;
+	lpData = &lpUsbData->confdesc;
+	lpData = sub_00000670(SPEED_FULL, lpUsbData->devdesc, &lpUsbData->config, &lpUsbData->confdesc);
 
-	g_driver.devp = v0->devdesc;	//v0;
-	g_driver.confp = &v0->config;	//v0 + 20;
-	//*(s32*)(sp + 0) = v0 + 36;
-	//*(s32*)(sp + 0) = sub_00000670(1, v0, v0 + 20, v0 + 36);	// (v, UsbData, UsbData::Config, UsbData::ConfDesc)
-	sub_00000670(1, v0->devdesc, &v0->config, &v0->confdesc);
 	g_info = 0;
 	g_bAttached = 0;
 
@@ -244,15 +244,14 @@ int DriverStart(int size, void *args)
 	g_usbDevReq.endp = g_usbEndps;
 	g_usbDevReq.data = g_lpData;
 	g_usbDevReq.size = 64;
+	g_usbDevReq.unkc	= 1;
 	g_usbDevReq.func = UsbDevReqComplete;
-	g_usbDevReq.retcode = 0;
-	g_usbDevReq.unkc = 1;
-	g_usbDevReq .unk1c = 0;
-	g_usbDevReq.arg = 0;
 	g_usbDevReq.recvsize = 0;
+	g_usbDevReq.retcode = 0;
+	g_usbDevReq.unk1c = 0;
+	g_usbDevReq.arg = 0;
+	sceUsbBus_driver_90B82F55();
 	g_bStarted = 1;
-	sceUsbBus_driver_90B82F55(UsbDevReqComplete);
-
 	return (0);
 }
 
@@ -296,34 +295,37 @@ int module_stop() // at 0x00000558
 	return (sceUsbbdUnregister(&g_driver) < 0);
 }
 
-int DriverStop(int size, void *args)
+int DriverStop(int size, void *args)	// 0x57C
 {
 	sceUsbBus_driver_7B87815D();
-	sceKernelDeleteFpl(g_createdPoolUID);
+	sceKernelDeleteFpl(g_hFPL);
 	g_bStarted = 0;
 	return (0);
 }
 
-void UsbDevReqComplete(struct UsbdDeviceReq *lpReq)
+void UsbDevReqComplete(struct UsbdDeviceReq *lpReq)	// 0x5B4
 {
-	if ((lpReq->retcode == 0) && (g_v8 >= 0))
+	if ((lpReq->retcode == 0) && (devReq.bmRequestType >= 0))
 	{
-		if (g_v9 == 1)
+		if (devReq.bRequest == 1)
 		{
 			g_info = *(u64*)(lpReq->data);
 		}
 	}
 }
 
-int Attach(int speed, void *arg2, void *arg3)
+// OK
+int Attach(int speed, void *arg2, void *arg3)	// 0x60C
 {
-	if (!g_bAttached)
+	int bAttached = g_bAttached;
+	if (!bAttached)
 	{
 		g_bAttached = 1;
 	}
+	return (bAttached);
 }
 
-int Detach(int arg1, int arg2, int arg3)
+int Detach(int arg1, int arg2, int arg3)	// 0x62C
 {
 	if (g_bAttached)
 	{
@@ -336,12 +338,11 @@ int Detach(int arg1, int arg2, int arg3)
 			g_usbEndps[i].unk3 = 0;
 		}
 	}
-	//return (v0);
+	return (0);
 }
 
 // OK?
-// (v, UsbData, UsbData::Config, UsbData::ConfDesc)
-struct UsbData *sub_00000670(int v, struct UsbData *lpUsbData, struct Config *lpUsbConf, struct ConfDesc *lpConfDesc) // at 0x00000670 
+struct UsbData *sub_00000670(int speed, struct DeviceDescriptor *lpDevDesc, struct Config *lpUsbConf, struct ConfDesc *lpConfDesc) // at 0x00000670 
 {
 	lpUsbConf->pconfdesc = lpConfDesc;	// UsbData::ConfDesc
 	lpUsbConf->pinterfaces = (u8*)lpConfDesc + 24;	// UsbData::Interfaces
@@ -358,7 +359,7 @@ struct UsbData *sub_00000670(int v, struct UsbData *lpUsbData, struct Config *lp
 		0x0100, 0x00, 0x00,
 		0x00, 0x01
 	};
-	*((struct DeviceDescriptor *)lpUsbData->devdesc) = devDesc;
+	*((struct DeviceDescriptor *)lpDevDesc) = devDesc;
 
 	/*a1 = 0x00000 + 2968;
 	int dw_B98[] =
@@ -419,8 +420,8 @@ struct UsbData *sub_00000670(int v, struct UsbData *lpUsbData, struct Config *lp
 
 	lpItrfcs->infp[0] = lpUsbConf->pinterfaces;
 	lpItrfcDesc->pendp = t6;
-	lpUsbData->devdesc[7] = 64;
+	lpDevDesc->bMaxPacketSize = 64;//lpUsbData->devdesc[7] = 64;
 	t6[0].wMaxPacketSize = 64;
-	t6[0].bInterval = (v != 2) ? 8 : 7;
+	t6[0].bInterval = (speed != SPEED_HIGH) ? 8 : 7;
 	return((struct UsbData *)((u8*)lpConfDesc + 24 + 12 + 48 + 32));	// &UsbData.endp[2]
 }
